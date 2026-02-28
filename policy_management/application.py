@@ -1,13 +1,13 @@
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from .domain import Policy, PolicyRepository
 
 class PolicyDTO(BaseModel):
     id: Optional[str] = None
-    customer_id: str
-    policy_type: str
-    coverage_amount: float
+    customer_id: str = Field(..., min_length=1, description="Associated customer ID")
+    policy_type: str = Field(..., min_length=3, max_length=100)
+    coverage_amount: float = Field(..., gt=0, description="Coverage amount must be greater than 0")
 
 class PolicyService:
     def __init__(self, repository: PolicyRepository):

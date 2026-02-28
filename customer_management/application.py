@@ -1,20 +1,19 @@
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional
 from .domain import Customer, CustomerRepository
 
 class CustomerDTO(BaseModel):
     id: Optional[str] = None
-    first_name: str
-    last_name: str
-    email: str
+    first_name: str = Field(..., min_length=2, max_length=50, description="Customer's first name")
+    last_name: str = Field(..., min_length=2, max_length=50, description="Customer's last name")
+    email: EmailStr = Field(..., description="Valid email address")
 
 class CustomerService:
     def __init__(self, repository: CustomerRepository):
         self.repository = repository
 
     def register_customer(self, dto: CustomerDTO) -> CustomerDTO:
-        # Мапінг DTO -> Entity
         customer = Customer(
             id=str(uuid.uuid4()),
             first_name=dto.first_name,
@@ -22,7 +21,6 @@ class CustomerService:
             email=dto.email
         )
         self.repository.save(customer)
-        # Мапінг Entity -> DTO
         return CustomerDTO(id=customer.id, first_name=customer.first_name, last_name=customer.last_name, email=customer.email)
 
     def get_customer(self, customer_id: str) -> Optional[CustomerDTO]:
