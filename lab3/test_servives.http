@@ -1,0 +1,18 @@
+### 1. Test successful synchronous interaction
+POST http://127.0.0.1:8002/api/v1/policies
+Content-Type: application/json
+X-Correlation-ID: custom-trace-12345
+
+{
+  "customer_id": 1,
+  "policy_type": "Health Insurance"
+}
+
+### 2. Test Resilience
+POST http://127.0.0.1:8002/api/v1/policies
+Content-Type: application/json
+
+{
+  "customer_id": 1,
+  "policy_type": "Auto Insurance"
+}

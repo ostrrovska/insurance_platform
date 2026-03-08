@@ -1,0 +1,8 @@
+fastapi>=0.104.1
+uvicorn>=0.24.0
+pydantic>=2.9.0
+pydantic-settings>=2.7.0
+email-validator>=2.1.0
+sqlalchemy>=2.0.0
+httpx>=0.25.0
+tenacity>=8.2.3
