@@ -1,0 +1,154 @@
+### ============================================================
+### LAB 4 — Transactional Outbox & Event-Driven Architecture
+### ============================================================
+### Base URLs:
+###   Customer Service  → http://localhost:8001
+###   Policy Service    → http://localhost:8002
+###   Notification Svc  → http://localhost:8003
+###   RabbitMQ UI       → http://localhost:15672  (guest/guest)
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 1 — Create customers (triggers CustomerCreated events)
+# ──────────────────────────────────────────────────────────────
+
+### 1.1 Create Customer Alice
+POST http://localhost:8001/api/v1/customers/
+Content-Type: application/json
+
+{
+  "name": "Alice Smith",
+  "email": "alice@example.com"
+}
+
+###
+
+### 1.2 Create Customer Bob
+POST http://localhost:8001/api/v1/customers/
+Content-Type: application/json
+
+{
+  "name": "Bob Jones",
+  "email": "bob@example.com"
+}
+
+###
+
+### 1.3 List all customers
+GET http://localhost:8001/api/v1/customers/
+
+###
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 2 — Create policies (triggers PolicyCreated events)
+# ──────────────────────────────────────────────────────────────
+
+### 2.1 Create policy for Alice (customer_id=1) with Correlation ID
+POST http://localhost:8002/api/v1/policies/
+Content-Type: application/json
+X-Correlation-ID: trace-alice-health-001
+
+{
+  "customer_id": 1,
+  "policy_type": "Health Insurance"
+}
+
+###
+
+### 2.2 Create policy for Bob (customer_id=2)
+POST http://localhost:8002/api/v1/policies/
+Content-Type: application/json
+X-Correlation-ID: trace-bob-auto-001
+
+{
+  "customer_id": 2,
+  "policy_type": "Auto Insurance"
+}
+
+###
+
+### 2.3 Try to create policy for non-existent customer → 404
+POST http://localhost:8002/api/v1/policies/
+Content-Type: application/json
+
+{
+  "customer_id": 9999,
+  "policy_type": "Life Insurance"
+}
+
+###
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 3 — Verify events were delivered to Notification Service
+# ──────────────────────────────────────────────────────────────
+
+### 3.1 List processed notifications
+GET http://localhost:8003/api/v1/notifications
+
+###
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 4 — RELIABILITY TEST (Transactional Outbox demo)
+#
+# Instructions:
+#   1. Stop RabbitMQ:  docker compose stop rabbitmq
+#   2. Run request 4.1 below — policy IS saved, event stays PENDING in outbox
+#   3. Check DB directly (optional):
+#        docker exec -it policy_db psql -U user -d policy_db \
+#          -c "SELECT id, event_type, status FROM outbox_messages;"
+#   4. Restart RabbitMQ:  docker compose start rabbitmq
+#   5. Wait ~5 seconds for the relay to sweep
+#   6. Run request 3.1 again — notification WILL appear automatically
+# ──────────────────────────────────────────────────────────────
+
+### 4.1 Create policy WHILE broker is stopped
+###     (event saved in outbox DB, delivered automatically when broker returns)
+POST http://localhost:8002/api/v1/policies/
+Content-Type: application/json
+X-Correlation-ID: reliability-test-001
+
+{
+  "customer_id": 1,
+  "policy_type": "Life Insurance"
+}
+
+###
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 5 — Inspect outbox tables directly
+# ──────────────────────────────────────────────────────────────
+
+### 5.1 Customer outbox — all messages
+# Run in terminal:
+# docker exec -it customer_db psql -U user -d customer_db \
+#   -c "SELECT id, event_type, status, sent_at FROM outbox_messages ORDER BY id;"
+
+### 5.2 Policy outbox — all messages
+# docker exec -it policy_db psql -U user -d policy_db \
+#   -c "SELECT id, event_type, status, sent_at, error FROM outbox_messages ORDER BY id;"
+
+###
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP 6 — Health checks
+# ──────────────────────────────────────────────────────────────
+
+### 6.1 Customer Service health
+GET http://localhost:8001/health
+
+###
+
+### 6.2 Policy Service health
+GET http://localhost:8002/health
+
+###
+
+### 6.3 Notification Service health
+GET http://localhost:8003/health
+
+###
