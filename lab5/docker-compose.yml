@@ -1,0 +1,224 @@
+
+services:
+  # ─── Message Broker ──────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: lab5_rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - lab5_rabbitmq_data:/var/lib/rabbitmq
+
+  # ─── Databases ───────────────────────────────────────────────────
+  customer_db:
+    image: postgres:15-alpine
+    container_name: lab5_customer_db
+    environment:
+      POSTGRES_DB: customer_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5438:5432"
+    volumes:
+      - lab5_customer_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d customer_db"]
+      interval: 5s
+      retries: 5
+
+  policy_db:
+    image: postgres:15-alpine
+    container_name: lab5_policy_db
+    environment:
+      POSTGRES_DB: policy_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5439:5432"
+    volumes:
+      - lab5_policy_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d policy_db"]
+      interval: 5s
+      retries: 5
+
+  payment_db:
+    image: postgres:15-alpine
+    container_name: lab5_payment_db
+    environment:
+      POSTGRES_DB: payment_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5440:5432"
+    volumes:
+      - lab5_payment_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d payment_db"]
+      interval: 5s
+      retries: 5
+
+  notification_db:
+    image: postgres:15-alpine
+    container_name: lab5_notification_db
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5441:5432"
+    volumes:
+      - lab5_notification_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d notification_db"]
+      interval: 5s
+      retries: 5
+
+  orchestrator_db:
+    image: postgres:15-alpine
+    container_name: lab5_orchestrator_db
+    environment:
+      POSTGRES_DB: orchestrator_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5442:5432"
+    volumes:
+      - lab5_orchestrator_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d orchestrator_db"]
+      interval: 5s
+      retries: 5
+
+  # ─── Microservices ───────────────────────────────────────────────
+  customer_service:
+    build: ./customer_service
+    container_name: lab5_customer_service
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql://user:password@customer_db:5432/customer_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SERVICE_PORT: "8001"
+    depends_on:
+      customer_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  policy_service:
+    build: ./policy_service
+    container_name: lab5_policy_service
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql://user:password@policy_db:5432/policy_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      CUSTOMER_SERVICE_URL: http://customer_service:8001
+      SERVICE_PORT: "8002"
+    depends_on:
+      policy_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      customer_service:
+        condition: service_started
+    restart: on-failure
+
+  payment_service:
+    build: ./payment_service
+    container_name: lab5_payment_service
+    ports:
+      - "8003:8003"
+    environment:
+      DATABASE_URL: postgresql://user:password@payment_db:5432/payment_db
+      SERVICE_PORT: "8003"
+    depends_on:
+      payment_db:
+        condition: service_healthy
+    restart: on-failure
+
+  notification_service:
+    build: ./notification_service
+    container_name: lab5_notification_service
+    ports:
+      - "8004:8004"
+    environment:
+      DATABASE_URL: postgresql://user:password@notification_db:5432/notification_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SERVICE_PORT: "8004"
+    depends_on:
+      notification_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  saga_orchestrator:
+    build: ./saga_orchestrator
+    container_name: lab5_saga_orchestrator
+    ports:
+      - "8005:8005"
+    environment:
+      DATABASE_URL: postgresql://user:password@orchestrator_db:5432/orchestrator_db
+      CUSTOMER_SERVICE_URL: http://customer_service:8001
+      POLICY_SERVICE_URL: http://policy_service:8002
+      PAYMENT_SERVICE_URL: http://payment_service:8003
+      SERVICE_PORT: "8005"
+    depends_on:
+      orchestrator_db:
+        condition: service_healthy
+      customer_service:
+        condition: service_started
+      policy_service:
+        condition: service_started
+      payment_service:
+        condition: service_started
+    restart: on-failure
+
+  # ─── Lab 6: API Gateway ───────────────────────────────────────────
+  # Single entry point for all external traffic.
+  # Routes requests to internal services based on URL path prefix.
+  # Also exposes API Composition endpoints (parallel data aggregation).
+  api_gateway:
+    build: ./api_gateway
+    container_name: lab5_api_gateway
+    ports:
+      - "8000:8000"   # Single public port — clients only need this
+    environment:
+      CUSTOMER_SERVICE_URL: http://customer_service:8001
+      POLICY_SERVICE_URL: http://policy_service:8002
+      PAYMENT_SERVICE_URL: http://payment_service:8003
+      NOTIFICATION_SERVICE_URL: http://notification_service:8004
+      SAGA_ORCHESTRATOR_URL: http://saga_orchestrator:8005
+      SERVICE_PORT: "8000"
+    depends_on:
+      customer_service:
+        condition: service_started
+      policy_service:
+        condition: service_started
+      payment_service:
+        condition: service_started
+      notification_service:
+        condition: service_started
+      saga_orchestrator:
+        condition: service_started
+    restart: on-failure
+
+volumes:
+  lab5_rabbitmq_data:
+  lab5_customer_db_data:
+  lab5_policy_db_data:
+  lab5_payment_db_data:
+  lab5_notification_db_data:
+  lab5_orchestrator_db_data:

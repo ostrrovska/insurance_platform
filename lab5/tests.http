@@ -1,0 +1,408 @@
+###############################################################################
+# LAB 5 + LAB 6 — Saga Pattern + API Gateway + API Composition
+# Insurance Platform
+#
+# ЗАПУСК: cd lab5 && docker compose up --build
+# Чекай ~40 сек поки всі контейнери стартують.
+#
+# ПОРТИ:
+#   8000 — api_gateway        (LAB 6) <- єдина точка входу для клієнтів
+#   8001 — customer_service   (внутрішній)
+#   8002 — policy_service     (внутрішній)
+#   8003 — payment_service    (внутрішній)
+#   8004 — notification_service (внутрішній)
+#   8005 — saga_orchestrator  (LAB 5)
+#
+# В реальній системі клієнти використовують ТІЛЬКИ порт 8000 (API Gateway).
+# Внутрішні порти 8001-8005 залишаються відкритими тільки для демонстрації.
+#
+# БД (для прямої перевірки):
+#   5438 — customer_db     (user / password)
+#   5439 — policy_db       (user / password)
+#   5440 — payment_db      (user / password)
+#   5441 — notification_db (user / password)
+#   5442 — orchestrator_db (user / password)
+###############################################################################
+
+
+###############################################################################
+# ═══════════════════════════════════════════════════════════════════════════
+#  ЧАСТИНА 1 — LAB 6: API GATEWAY + API COMPOSITION
+# ═══════════════════════════════════════════════════════════════════════════
+###############################################################################
+
+
+###############################################################################
+# КРОК 1 — Health checks через API Gateway (порт 8000)
+###############################################################################
+
+### 1.1 Health check самого Gateway
+GET http://localhost:8000/health
+
+###
+
+### 1.2 Інформаційна сторінка Gateway (список маршрутів)
+GET http://localhost:8000/
+
+###
+
+
+###############################################################################
+# КРОК 2 — Routing: всі запити через Gateway (порт 8000)
+# Gateway проксує запити до відповідних внутрішніх сервісів
+###############################################################################
+
+### 2.1 Створити клієнта ЧЕРЕЗ GATEWAY (Gateway -> customer_service:8001)
+POST http://localhost:8000/api/v1/customers/
+Content-Type: application/json
+
+{
+  "name": "Марія Коваленко",
+  "email": "maria.kovalenko@example.com"
+}
+
+###
+
+### 2.2 Список клієнтів ЧЕРЕЗ GATEWAY
+GET http://localhost:8000/api/v1/customers/
+
+###
+
+### 2.3 Запустити сагу ЧЕРЕЗ GATEWAY (Gateway -> saga_orchestrator:8005)
+# Підстав customer_id з кроку 2.1 (зазвичай 1)
+POST http://localhost:8000/api/v1/sagas/policy-purchase
+Content-Type: application/json
+
+{
+  "customer_id": 1,
+  "policy_type": "AUTO",
+  "coverage_amount": 150000.00,
+  "premium_amount": 1800.00,
+  "simulate_payment_failure": false
+}
+
+###
+
+### 2.4 Статус саги ЧЕРЕЗ GATEWAY (Gateway -> saga_orchestrator:8005)
+# Підстав saga_id з відповіді 2.3
+GET http://localhost:8000/api/v1/sagas/SAGA_ID_FROM_2_3
+
+###
+
+### 2.5 Список полісів ЧЕРЕЗ GATEWAY (Gateway -> policy_service:8002)
+GET http://localhost:8000/api/v1/policies/
+
+###
+
+### 2.6 Список платежів ЧЕРЕЗ GATEWAY (Gateway -> payment_service:8003)
+GET http://localhost:8000/api/v1/payments/
+
+###
+
+### 2.7 Notifications ЧЕРЕЗ GATEWAY (Gateway -> notification_service:8004)
+GET http://localhost:8000/api/v1/notifications
+
+###
+
+
+###############################################################################
+# КРОК 3 — API COMPOSITION: успішна агрегація даних
+#
+# Бізнес-кейс: "Дашборд клієнта" — одним запитом отримуємо:
+#   - Дані клієнта
+#   - Всі його поліси
+#   - Всі його платежі
+#   - Зведену статистику (покриття, витрати)
+#
+# Gateway паралельно викликає customer_service + policy_service + payment_service
+# і повертає злитий JSON. Замість 3 запитів від клієнта — 1.
+###############################################################################
+
+### 3.1 Дашборд клієнта — ПОВНА ВІДПОВІДЬ (всі сервіси доступні)
+# Підстав customer_id з кроку 2.1 (зазвичай 1)
+# Очікуємо:
+#   status: "complete"
+#   customer: {...}
+#   policies: [...]
+#   payments: [...]
+#   summary: { active_policies, total_active_coverage, total_paid, ... }
+#   errors: {}
+GET http://localhost:8000/api/v1/composition/customer/1/dashboard
+
+###
+
+### 3.2 Деталі конкретного полісу (policy + customer + payment history)
+# Підстав policy_id з відповіді 2.4 (зазвичай 1)
+# Очікуємо:
+#   status: "complete"
+#   policy: {...}
+#   customer: {...}
+#   payments: [...]
+#   payment_summary: { total_paid, completed_count, ... }
+GET http://localhost:8000/api/v1/composition/policy/1/details
+
+###
+
+### 3.3 Дашборд клієнта якого немає — очікуємо 404
+GET http://localhost:8000/api/v1/composition/customer/9999/dashboard
+
+###
+
+
+###############################################################################
+# КРОК 4 — API COMPOSITION: ЧАСТКОВА ВІДПОВІДЬ при недоступності сервісу
+#
+# Демонстрація стійкості: якщо один з upstream-сервісів недоступний,
+# Gateway повертає дані з тих сервісів, що відповіли (partial response).
+#
+# СЦЕНАРІЙ: зупинити payment_service і зробити запит до composition.
+#
+# Команда для зупинки:
+#   docker compose stop payment_service
+#
+# Очікуємо:
+#   status: "partial"
+#   customer: {...}        <- отримано
+#   policies: [...]        <- отримано
+#   payments: null         <- payment_service недоступний
+#   summary: { policies: ..., payments: "unavailable" }
+#   errors: { "payment_service": "service unavailable (connection refused)" }
+#
+# Для відновлення:
+#   docker compose start payment_service
+###############################################################################
+
+### 4.1 Дашборд із ЧАСТКОВИМИ ДАНИМИ (після зупинки payment_service)
+# Виконай тільки після: docker compose stop payment_service
+GET http://localhost:8000/api/v1/composition/customer/1/dashboard
+
+###
+
+### 4.2 Відновити payment_service і перевірити що все знову "complete"
+# Виконай після: docker compose start payment_service
+# (зачекай ~10 сек)
+GET http://localhost:8000/api/v1/composition/customer/1/dashboard
+
+###
+
+
+###############################################################################
+# КРОК 5 — Демонстрація Gateway routing з різними методами
+###############################################################################
+
+### 5.1 Отримати конкретного клієнта ЧЕРЕЗ GATEWAY
+GET http://localhost:8000/api/v1/customers/1
+
+###
+
+### 5.2 Отримати конкретний поліс ЧЕРЕЗ GATEWAY
+GET http://localhost:8000/api/v1/policies/1
+
+###
+
+### 5.3 Отримати конкретний платіж ЧЕРЕЗ GATEWAY
+GET http://localhost:8000/api/v1/payments/1
+
+###
+
+### 5.4 Список полісів з фільтром по клієнту ЧЕРЕЗ GATEWAY
+GET http://localhost:8000/api/v1/policies/?customer_id=1
+
+###
+
+### 5.5 Список платежів з фільтром по полісу ЧЕРЕЗ GATEWAY
+GET http://localhost:8000/api/v1/payments/?policy_id=1
+
+###
+
+### 5.6 Спроба звернутися до невідомого сервісу — очікуємо 404 від Gateway
+GET http://localhost:8000/api/v1/unknown-service/test
+
+###
+
+
+###############################################################################
+# ═══════════════════════════════════════════════════════════════════════════
+#  ЧАСТИНА 2 — LAB 5: SAGA PATTERN (Оркестрація)
+# ═══════════════════════════════════════════════════════════════════════════
+###############################################################################
+
+
+###############################################################################
+# КРОК 6 — Підготовка: Створити клієнта (напряму або через Gateway)
+###############################################################################
+
+### 6.1 Створити ще одного клієнта для саги (через Gateway)
+POST http://localhost:8000/api/v1/customers/
+Content-Type: application/json
+
+{
+  "name": "Олег Іваненко",
+  "email": "oleg.ivanenko@example.com"
+}
+
+###
+
+### 6.2 Список всіх клієнтів
+GET http://localhost:8000/api/v1/customers/
+
+###
+
+
+###############################################################################
+# КРОК 7 — СЦЕНАРІЙ САГИ 1: УСПІШНЕ ЗАВЕРШЕННЯ
+#
+# Очікуваний результат:
+#   saga.status    = COMPLETED
+#   policy.status  = ACTIVE
+#   payment.status = COMPLETED
+###############################################################################
+
+### 7.1 Запустити успішну сагу (simulate_payment_failure: false)
+POST http://localhost:8005/api/v1/sagas/policy-purchase
+Content-Type: application/json
+
+{
+  "customer_id": 1,
+  "policy_type": "HEALTH",
+  "coverage_amount": 200000.00,
+  "premium_amount": 2400.00,
+  "simulate_payment_failure": false
+}
+
+###
+
+### 7.2 Перевірити статус саги
+# Підстав saga_id з відповіді 7.1
+# Через ~1 сек має бути status=COMPLETED
+# steps_log покаже: STARTED -> VALIDATING_CUSTOMER -> CREATING_POLICY
+#                   -> PROCESSING_PAYMENT -> ACTIVATING_POLICY -> COMPLETED
+GET http://localhost:8005/api/v1/sagas/SAGA_ID_FROM_7_1
+
+###
+
+### 7.3 Перевірити поліс (status = ACTIVE)
+GET http://localhost:8005/api/v1/sagas/
+
+###
+
+### 7.4 Всі поліси — має бути ACTIVE
+GET http://localhost:8002/api/v1/policies/
+
+###
+
+### 7.5 Всі платежі — має бути COMPLETED
+GET http://localhost:8003/api/v1/payments/
+
+###
+
+
+###############################################################################
+# КРОК 8 — СЦЕНАРІЙ САГИ 2: ПОМИЛКА + АВТОМАТИЧНА КОМПЕНСАЦІЯ
+#
+# Очікуваний результат:
+#   saga.status    = COMPENSATED   <- компенсація виконана
+#   policy.status  = CANCELLED     <- компенсуюча транзакція
+#   payment.status = FAILED        <- платіж не пройшов
+###############################################################################
+
+### 8.1 Запустити сагу з simulate_payment_failure: true
+POST http://localhost:8005/api/v1/sagas/policy-purchase
+Content-Type: application/json
+
+{
+  "customer_id": 1,
+  "policy_type": "LIFE",
+  "coverage_amount": 500000.00,
+  "premium_amount": 5000.00,
+  "simulate_payment_failure": true
+}
+
+###
+
+### 8.2 Перевірити статус саги
+# Підстав saga_id з відповіді 8.1
+# Очікуємо:
+#   status = "COMPENSATED"
+#   error  = "Payment failed (HTTP 402): ..."
+#   steps_log: ... -> COMPENSATING -> CANCEL_POLICY -> COMPENSATED
+GET http://localhost:8005/api/v1/sagas/SAGA_ID_FROM_8_1
+
+###
+
+### 8.3 Всі саги — COMPLETED та COMPENSATED
+GET http://localhost:8005/api/v1/sagas/
+
+###
+
+### 8.4 КЛЮЧОВА ПЕРЕВІРКА: поліс з компенсованої саги має статус CANCELLED
+GET http://localhost:8002/api/v1/policies/
+
+###
+
+### 8.5 Всі платежі — COMPLETED і FAILED
+GET http://localhost:8003/api/v1/payments/
+
+###
+
+
+###############################################################################
+# КРОК 9 — ДАШБОРД ПІСЛЯ ОБОХ САГ (підсумкова перевірка узгодженості)
+#
+# Після виконання сценаріїв 7 і 8:
+#   Поліс 1 (AUTO)   — ACTIVE
+#   Поліс 2 (HEALTH) — ACTIVE    (з сценарію 7)
+#   Поліс 3 (LIFE)   — CANCELLED (з сценарію 8, компенсовано)
+#   Платіж 1 — COMPLETED
+#   Платіж 2 — COMPLETED
+#   Платіж 3 — FAILED
+###############################################################################
+
+### 9.1 Дашборд клієнта — перевірити фінальний стан всіх даних
+# Composition endpoint бере дані паралельно з 3 сервісів і агрегує
+GET http://localhost:8000/api/v1/composition/customer/1/dashboard
+
+###
+
+### 9.2 Notifications — побачимо всі події з обох саг
+# PolicyActivated (x2) і PolicyCancelled (x1) — підтвердження узгодженості
+GET http://localhost:8000/api/v1/notifications
+
+###
+
+
+###############################################################################
+# ПЕРЕВІРКА ДАНИХ У БД
+# SQL для psql / DBeaver / DataGrip / TablePlus
+#
+# policy_db (localhost:5439, user/password):
+#   SELECT id, policy_type, status, coverage_amount FROM policies ORDER BY id;
+#   Очікування після всіх сценаріїв:
+#     id=1  AUTO   ACTIVE    (сага з кроку 2.3)
+#     id=2  HEALTH ACTIVE    (сага з кроку 7.1)
+#     id=3  LIFE   CANCELLED (сага з кроку 8.1, компенсована)
+#
+# payment_db (localhost:5440, user/password):
+#   SELECT id, policy_id, amount, status FROM payments ORDER BY id;
+#   id=1  1800  COMPLETED
+#   id=2  2400  COMPLETED
+#   id=3  5000  FAILED
+#
+# orchestrator_db (localhost:5442, user/password):
+#   SELECT id, status, policy_id, payment_id, error FROM sagas ORDER BY created_at;
+#   SELECT id, steps_log FROM sagas WHERE status='COMPENSATED';
+###############################################################################
+
+
+###############################################################################
+# SWAGGER UI (відкрий в браузері)
+# http://localhost:8000/docs  — API Gateway (єдина точка входу)
+# http://localhost:8001/docs  — customer_service
+# http://localhost:8002/docs  — policy_service
+# http://localhost:8003/docs  — payment_service
+# http://localhost:8004/docs  — notification_service
+# http://localhost:8005/docs  — saga_orchestrator
+#
+# RABBITMQ MANAGEMENT
+# http://localhost:15672  (guest / guest)
+###############################################################################
