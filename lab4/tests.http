@@ -17,8 +17,8 @@ POST http://localhost:8001/api/v1/customers/
 Content-Type: application/json
 
 {
-  "name": "Alice Smith",
-  "email": "alice@example.com"
+  "name": "Alice Smith2",
+  "email": "alice@example.com2"
 }
 
 ###

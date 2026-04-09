@@ -108,7 +108,9 @@ class RabbitMQConsumer:
                 connection, queue = await self._setup()
                 await queue.consume(self._handle_message)
                 logger.info("Consumer listening for messages...")
-                await connection.closing
+                close_event = asyncio.Event()
+                connection.close_callbacks.add(lambda *_: close_event.set())
+                await close_event.wait()
                 logger.warning("RabbitMQ connection closed — reconnecting…")
             except asyncio.CancelledError:
                 raise

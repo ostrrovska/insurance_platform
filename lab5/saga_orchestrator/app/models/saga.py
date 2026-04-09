@@ -69,7 +69,7 @@ class Saga(Base):
 
     def append_step(self, step: str, details: str = "") -> None:
         """Add a step entry to the steps_log JSON array."""
-        steps = json.loads(self.steps_log)
+        steps = json.loads(self.steps_log or "[]")
         steps.append({
             "step": step,
             "details": details,
